@@ -177,11 +177,19 @@ function credentialCard(c: KeychainCredential): TemplateResult {
                     <div>
                       <span class="kc-access-label">Pending</span>
                       <bdi><strong>${scopeName(ask.requesterScopeId)}</strong></bdi>
-                      <span
-                        >· ${accessModeLabel(ask.requestedMode)} · ${ask.purpose} · expires
-                        ${fmtDate(ask.expiresAt)}</span
-                      >
+                      <span>· ${accessModeLabel(ask.requestedMode)} · expires ${fmtDate(ask.expiresAt)}</span>
                     </div>
+                    ${(["standing", "once", "deny"] as const).map(
+                      (decision) =>
+                        html`<button
+                          class=${`kc-text-action${decision === "deny" ? " danger" : ""}`}
+                          type="button"
+                          ?disabled=${keychainOperations.mutationInFlight}
+                          @click=${() => void decideAsk(ask.id, decision)}
+                        >
+                          ${{ standing: "Allow", once: "Allow once", deny: "Deny" }[decision]}
+                        </button>`,
+                    )}
                   </div>`,
               )}
             </div>`
@@ -683,6 +691,40 @@ async function revokeGrant(grant: KeychainGrant): Promise<void> {
     },
   };
   drawConnectors();
+}
+
+let pendingApprovals = 0;
+let pendingCheckedAt = 0;
+
+export function pendingApprovalCount(onChange: () => void): number {
+  if (Date.now() - pendingCheckedAt > 60_000) {
+    pendingCheckedAt = Date.now();
+    void api<{ asks?: KeychainAsk[] }>("/api/keychain/overview").then(
+      (value) => {
+        const next = value.asks?.length ?? 0;
+        if (next !== pendingApprovals) {
+          pendingApprovals = next;
+          onChange();
+        }
+      },
+      () => {},
+    );
+  }
+  return pendingApprovals;
+}
+
+async function decideAsk(id: string, decision: "standing" | "once" | "deny"): Promise<void> {
+  try {
+    await api(`/api/keychain/approvals/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    });
+    connectorNotice = decision === "deny" ? "Access denied" : "Access approved ✓";
+  } catch (e) {
+    connectorNotice = errMessage(e, "Could not record the decision.");
+  }
+  pendingCheckedAt = 0;
+  await renderConnectors();
 }
 
 async function performRevokeGrant(id: string, stateEpoch: number): Promise<void> {

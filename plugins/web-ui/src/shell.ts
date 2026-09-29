@@ -88,7 +88,13 @@ import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
 import { closeBrowse, openBrowse } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
-import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
+import {
+  clearConnectorNotice,
+  noteConnectorResult,
+  pendingApprovalCount,
+  renderConnectors,
+  resetKeychainState,
+} from "./connectors";
 import { openDeployById, renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderCalendar } from "./calendar";
@@ -622,6 +628,7 @@ export function renderSidebarTop(): void {
       ${icon(glyph, 17)}<span>${label}</span>
     </button>`;
   const newChatLabel = splitState.active ? "New session" : "Create New Chat";
+  const approvals = pendingApprovalCount(renderSidebarTop);
   render(
     html`
       <nav class="nav quick-nav" @click=${onNavClick}>
@@ -635,6 +642,14 @@ export function renderSidebarTop(): void {
           hideTooltip();
           openBrowse();
         })}
+        ${
+          approvals > 0
+            ? html`<a class="navrow" href=${deepLinkPath(UI_BASE, "keychain", null)} data-view="keychain"
+                >${icon(KeyRound, 17)}<span>Approvals</span
+                ><span class="nav-badge" aria-label=${`${approvals} waiting on you`}>${approvals}</span></a
+              >`
+            : nothing
+        }
       </nav>
       <div class="nav new-chat-nav">
         ${actionRow(ICON.newChat, newChatLabel, () => {

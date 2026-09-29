@@ -166,11 +166,16 @@ test("keychain index keeps operational state and removes redundant explanatory c
   assert.match(connectorsSource, /encrypted one-time page next/);
 });
 
-test("keychain access rows retain security-relevant mode and purpose", () => {
+test("keychain access rows keep mode, and pending asks omit the raw purpose like the Slack card", () => {
   assert.match(connectorsSource, /accessModeLabel\(ask\.requestedMode\)/);
-  assert.match(connectorsSource, /ask\.purpose/);
+  assert.doesNotMatch(connectorsSource, /ask\.purpose/);
   assert.equal(connectorsSource.match(/accessModeLabel\(grant\.mode\)/g)?.length, 2);
   assert.equal(connectorsSource.match(/grant\.purpose/g)?.length, 2);
+});
+
+test("pending asks are decided on the card through the shared approval route", () => {
+  assert.match(connectorsSource, /\/api\/keychain\/approvals\//);
+  for (const label of ["Allow", "Allow once", "Deny"]) assert.ok(connectorsSource.includes(`"${label}"`));
 });
 
 test("keychain actions keep secondary weight and compact mobile sizing", () => {

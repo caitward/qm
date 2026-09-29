@@ -1,3 +1,4 @@
+import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
@@ -451,7 +452,11 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
   const refused = mkDeps(async () => ({ status: "refused", reason: "rate limit exceeded" }) as TurnResult);
   await fireAskResolution(refused, ask);
   await fireAskResolution(refused, ask);
-  assert.deepEqual(await texts(refused), ["Access approved."], "fallback is plain and at-most-once");
+  assert.deepEqual(
+    await texts(refused),
+    ["Access approved, but the task could not restart on its own. It will have access the next time it runs."],
+    "fallback is plain and at-most-once",
+  );
   for (const status of ["declined", "expired"] as const) {
     const other = { ...ask, id: `fa11bacc${status}`, status };
     const deps = mkDeps(async () => ({ status: "refused" }) as TurnResult, other);
@@ -632,9 +637,17 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         { channelId: "C_PUBLIC", principalId: "U_BOB" },
       ],
     );
+    approvals = createKeychainApprovals({
+      keychain: built.keychain!,
+      app: built.app,
+      identity: built.identity,
+      sessions: built.sessions,
+      resume: (ask, grant) => built.fireAskResolution!(ask, grant),
+    });
     server = createServer(built.app, {
       signingSecret: SECRET,
       keychain: built.keychain,
+      keychainApprovals: approvals,
       deliveries: built.deliveries,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
       workspace: built.workspace,
@@ -643,16 +656,45 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    approvals = createKeychainApprovals({
-      keychain: built.keychain!,
-      app: built.app,
-      identity: built.identity,
-      sessions: built.sessions,
-      resume: (ask, grant) => built.fireAskResolution!(ask, grant),
-    });
   });
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("the web approval route decides through the same card path, owner only, never by capability", async () => {
+    const { credential } = (await (
+      await post("/v1/keychain/credentials", { service: "web-card", secret: "w" }, await capFor("U_ALICE"))
+    ).json()) as any;
+    const { ask } = (await (
+      await post(
+        "/v1/keychain/asks",
+        { credential: credential.id, purpose: "deploy" },
+        await capFor("U_BOB", "channel:C_INFRA", {
+          threadRef: "ch:C_INFRA-web",
+          destination: { type: "slack", target: "C_INFRA", audienceScopeId: "channel:C_INFRA" },
+        }),
+      )
+    ).json()) as any;
+    const path = `/v1/keychain/approvals/${ask.id}`;
+    const signed = (principalId: string) => {
+      const body = JSON.stringify({ principalId, decision: "standing" });
+      return fetch(`${base}${path}`, {
+        method: "POST",
+        headers: signedRequestHeaders(SECRET, "POST", path, body),
+        body,
+      });
+    };
+    assert.notEqual(
+      (await post(path, { principalId: "U_ALICE", decision: "standing" }, await capFor("U_ALICE"))).status,
+      200,
+    );
+    assert.equal((await signed("U_BOB")).status, 403);
+    const res = await signed("U_ALICE");
+    assert.equal(res.status, 200);
+    const view = (await res.json()) as any;
+    assert.equal(view.ask.status, "approved");
+    assert.equal(view.mode, "standing");
+    assert.equal((await built.keychain!.getGrant(view.ask.grantId))!.audienceScopeId, "channel:C_INFRA");
   });
 
   it("gates creation: personal ownership and directory-verified channel membership", async () => {
